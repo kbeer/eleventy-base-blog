@@ -1,100 +1,85 @@
-const { DateTime } = require("luxon");
-const fs = require("fs");
-const pluginRss = require("@11ty/eleventy-plugin-rss");
-const pluginSyntaxHighlight = require("@11ty/eleventy-plugin-syntaxhighlight");
-const pluginNavigation = require("@11ty/eleventy-navigation");
-const markdownIt = require("markdown-it");
-const markdownItAnchor = require("markdown-it-anchor");
+var env = process.env.ELEVENTY_ENV;
 
 module.exports = function(eleventyConfig) {
+
+  // syntax highlighting plugin
+  const syntaxHighlightPlugin = require("@11ty/eleventy-plugin-syntaxhighlight");
+  eleventyConfig.addPlugin(syntaxHighlightPlugin, {
+    templateFormats: "md"
+  });
+
+  // RSS plugin
+  const pluginRss = require("@11ty/eleventy-plugin-rss");
   eleventyConfig.addPlugin(pluginRss);
-  eleventyConfig.addPlugin(pluginSyntaxHighlight);
-  eleventyConfig.addPlugin(pluginNavigation);
 
-  eleventyConfig.setDataDeepMerge(true);
 
-  eleventyConfig.addLayoutAlias("post", "layouts/post.njk");
+  // Add filters to Nunjucks
+  eleventyConfig.addFilter("dateDisplay", require("./src/site/_filters/dates.js") );
+  eleventyConfig.addFilter("section", require("./src/site/_filters/section.js") );
+  eleventyConfig.addFilter("squash", require("./src/site/_filters/squash.js") );
+  eleventyConfig.addFilter("kebab", require("./src/site/_filters/kebab.js") );
 
-  eleventyConfig.addFilter("readableDate", dateObj => {
-    return DateTime.fromJSDate(dateObj, {zone: 'utc'}).toFormat("dd LLL yyyy");
+  // Assemble some collections
+  eleventyConfig.addCollection("tagList", require("./src/site/_filters/getTagList.js"));
+  eleventyConfig.addCollection("posts", function(collection) {
+    return collection.getFilteredByGlob("src/site/blog/*.md").reverse();
+  });
+  eleventyConfig.addCollection("cards", function(collection) {
+    return collection.getAll().filter(function(item) {
+      return "card" in item.data;
+    });
   });
 
-  // https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#valid-date-string
-  eleventyConfig.addFilter('htmlDateString', (dateObj) => {
-    return DateTime.fromJSDate(dateObj, {zone: 'utc'}).toFormat('yyyy-LL-dd');
-  });
 
-  // Get the first `n` elements of a collection.
-  eleventyConfig.addFilter("head", (array, n) => {
-    if( n < 0 ) {
-      return array.slice(n);
+  // static passthroughs
+  eleventyConfig.addPassthroughCopy("src/site/fonts");
+  eleventyConfig.addPassthroughCopy("src/site/images");
+  eleventyConfig.addPassthroughCopy("src/site/manifest.json");
+  eleventyConfig.addPassthroughCopy("src/site/browserconfig.xml");
+
+  // minify the html output
+  const htmlmin = require("html-minifier");
+  eleventyConfig.addTransform("htmlmin", function(content, outputPath) {
+    if( outputPath.endsWith(".html") ) {
+      let minified = htmlmin.minify(content, {
+        useShortDoctype: true,
+        removeComments: false, // we need comments to identify the excerpt split marker.
+        collapseWhitespace: true
+      });
+      return minified;
     }
-
-    return array.slice(0, n);
+    return content;
   });
 
-  eleventyConfig.addCollection("tagList", require("./_11ty/getTagList"));
 
-  eleventyConfig.addPassthroughCopy("img");
-  eleventyConfig.addPassthroughCopy("css");
-
-  /* Markdown Overrides */
-  let markdownLibrary = markdownIt({
-    html: true,
-    breaks: true,
-    linkify: true
-  }).use(markdownItAnchor, {
-    permalink: true,
-    permalinkClass: "direct-link",
-    permalinkSymbol: "#"
-  });
-  eleventyConfig.setLibrary("md", markdownLibrary);
-
-  // Browsersync Overrides
-  eleventyConfig.setBrowserSyncConfig({
-    callbacks: {
-      ready: function(err, browserSync) {
-        const content_404 = fs.readFileSync('_site/404.html');
-
-        browserSync.addMiddleware("*", (req, res) => {
-          // Provides the 404 content without redirect.
-          res.write(content_404);
-          res.end();
-        });
-      },
-    },
-    ui: false,
-    ghostMode: false
+  // Avoid orphans
+  eleventyConfig.addFilter("orphanWrap", function(text) {
+    if(!text) return;
+    let splitSpace = text.split(" ");
+    let after = "";
+    if(splitSpace.length > 2) {
+      after += " ";
+      let lastWord = splitSpace.pop();
+      let secondLastWord = splitSpace.pop();
+      after += `${secondLastWord}&nbsp;${lastWord}`;
+    }
+    return splitSpace.join(" ") + after;
   });
 
+  // other config settings
+
+  // make the prime target act like prod
+  env = (env=="prime") ? "prod" : env;
   return {
-    templateFormats: [
-      "md",
-      "njk",
-      "html",
-      "liquid"
-    ],
-
-    // If your site lives in a different subdirectory, change this.
-    // Leading or trailing slashes are all normalized away, so don’t worry about those.
-
-    // If you don’t have a subdirectory, use "" or "/" (they do the same thing)
-    // This is only used for link URLs (it does not affect your file structure)
-    // Best paired with the `url` filter: https://www.11ty.io/docs/filters/url/
-
-    // You can also pass this in on the command line using `--pathprefix`
-    // pathPrefix: "/",
-
-    markdownTemplateEngine: "liquid",
-    htmlTemplateEngine: "njk",
-    dataTemplateEngine: "njk",
-
-    // These are all optional, defaults are shown:
     dir: {
-      input: ".",
-      includes: "_includes",
-      data: "_data",
-      output: "_site"
-    }
+      input: "src/site",
+      output: "dist",
+      data: `_data/${env}`
+    },
+    templateFormats : ["njk", "md"],
+    htmlTemplateEngine : "njk",
+    markdownTemplateEngine : "njk",
+    passthroughFileCopy: true
   };
+
 };
